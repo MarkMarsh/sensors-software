@@ -61,6 +61,10 @@ String		user_influx
 Password		pwd_influx
 String		measurement_name_influx
 Bool		ssl_influx
+Bool        send2ttn
+String      ttn_appeui
+String      ttn_deveui
+String      ttn_appkey
 """
 
 with open("airrohr-cfg.h", "w") as h:

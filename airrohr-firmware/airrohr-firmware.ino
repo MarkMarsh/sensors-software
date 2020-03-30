@@ -111,6 +111,10 @@ String SOFTWARE_VERSION(SOFTWARE_VERSION_STR);
 #include "./bmx280_i2c.h"
 #include "./sps30_i2c.h"
 #include "./dnms_i2c.h"
+// for TTN
+#include <lmic.h>
+#include <hal/hal.h>
+#include <SPI.h>
 
 #if defined(INTL_BG)
 #include "intl_bg.h"
@@ -201,6 +205,12 @@ namespace cfg {
 	// wifi credentials
 	char wlanssid[LEN_WLANSSID];
 	char wlanpwd[LEN_CFG_PASSWORD];
+
+	// TTN enabled flag and credentials
+	bool send2ttn = SEND2TTN;
+	char ttn_appeui[LEN_TTN_APPEUI];
+	char ttn_deveui[LEN_TTN_DEVEUI];
+	char ttn_appkey[LEN_TTN_APPKEY];
 
 	// credentials of the sensor in access point mode
 	char fs_ssid[LEN_FS_SSID] = FS_SSID;
@@ -661,6 +671,77 @@ static void add_Value2Json(String& res, const __FlashStringHelper* type, const _
 	debug_outln_info(FPSTR(debug_type), value);
 	add_Value2Json(res, type, String(value));
 }
+
+/*****************************************************************
+ * TTN                                                   *
+ *****************************************************************/
+// check the library has been set to the EU frequency
+#if CFG_eu868 != 1
+#pragma error "You must edit project_config/lmic_project_config.h in the library (yes really) to set the frequency"
+#endif
+
+// converts two bytes of hex string to unsigned char
+// val doesn't have to be null terminated
+static unsigned char hex_to_uc(const char *val)  {
+    char tmp[3]; tmp[2] = 0;
+    strncpy(tmp, val, 2);
+    return((unsigned char)strtol(tmp, NULL, 16));
+}
+
+// converts hex TTN EUI to 8 byte buffer
+// use default format from GUI
+static bool decode_ttn_eui(const char *hexstr, unsigned char *buffer)  {
+    if(strlen(hexstr) != 16)  {
+        debug_outln_error(F("ERROR : TTN EUI is incorrect length"));
+        debug_outln_info(hexstr);
+        return false;
+    }
+    size_t memidx = 7;
+//    size_t memidx = 0;
+    for(int i = 0; i < 16; i += 2)  {
+        buffer[memidx--] = hex_to_uc(hexstr + i);
+//        buffer[memidx++] = hex_to_uc(hexstr + i);
+    }
+    return true;
+}
+
+// converts 32 char hex appkey to 16 byte buffer
+static bool decode_ttn_appkey(const char *hexstr, unsigned char *buffer)  {
+    if(strlen(hexstr) != 32)  {
+        debug_outln_error(F("ERROR : TTN APPKEY is incorrect length"));
+        debug_outln_info(hexstr);
+        return false;
+    }
+    size_t memidx = 0;
+    for(int i = 0; i < 32; i += 2)  {
+        buffer[memidx++] = hex_to_uc(hexstr + i);
+    }
+    return true;
+}
+
+// provide callbacks for the OTAA join to fetch the keys
+void os_getArtEui (u1_t* buf) { 
+	decode_ttn_eui(cfg::ttn_appeui, buf);
+	debug_outln_info(F("appeui: "), cfg::ttn_appeui);
+}
+void os_getDevEui (u1_t* buf) { 
+	decode_ttn_eui(cfg::ttn_deveui, buf);
+	debug_outln_info(F("deveui: "), cfg::ttn_deveui);
+}
+void os_getDevKey (u1_t* buf) {  
+	decode_ttn_appkey(cfg::ttn_appkey, buf);
+	debug_outln_info(F("appkey: "), cfg::ttn_appkey);
+}
+
+static osjob_t sendjob;
+
+// Pin mapping
+const lmic_pinmap lmic_pins = {
+    .nss = 15,
+    .rxtx = LMIC_UNUSED_PIN,
+    .rst = LMIC_UNUSED_PIN,
+    .dio = {5, 16, LMIC_UNUSED_PIN},
+};
 
 /*****************************************************************
  * send SDS011 command (start, stop, continuous mode, version    *
@@ -1520,6 +1601,18 @@ static void webserver_config_send_body_get(String& page_content) {
 	add_form_input(page_content, Config_pwd_influx, FPSTR(INTL_PASSWORD), LEN_CFG_PASSWORD-1);
 	add_form_input(page_content, Config_measurement_name_influx, F("Measurement"), LEN_MEASUREMENT_NAME_INFLUX-1);
 	page_content += FPSTR(TABLE_TAG_CLOSE_BR);
+
+	page_content = FPSTR(WEB_BR_LF_B);
+	page_content += FPSTR(INTL_TTN_TITLE);
+	page_content += FPSTR(WEB_B_BR);
+	page_content += FPSTR(TABLE_TAG_OPEN);
+	add_form_checkbox(Config_send2ttn, FPSTR(INTL_SEND2TTN));
+	add_form_input(page_content, Config_ttn_deveui, FPSTR(INTL_TTN_DEVEUI), 16);
+	add_form_input(page_content, Config_ttn_appeui, FPSTR(INTL_TTN_APPEUI), 16);
+	add_form_input(page_content, Config_ttn_appkey, FPSTR(INTL_TTN_APPKEY), 32);
+	page_content += FPSTR(TABLE_TAG_CLOSE_BR);
+
+
 	page_content += form_submit(FPSTR(INTL_SAVE_AND_RESTART));
 	page_content += FPSTR(BR_TAG);
 	page_content += FPSTR(WEB_BR_FORM);
@@ -1609,6 +1702,7 @@ static void webserver_config_send_body_post(String& page_content) {
 	add_line_value_bool(page_content, FPSTR(INTL_SEND_TO), FPSTR(WEB_FEINSTAUB_APP), send2fsapp);
 	add_line_value_bool(page_content, FPSTR(INTL_SEND_TO), F("opensensemap"), send2sensemap);
 
+
 	// Paginate after ~ 1500 bytes
 	server.sendContent(page_content);
 	page_content = emptyString;
@@ -1616,6 +1710,15 @@ static void webserver_config_send_body_post(String& page_content) {
 	page_content += F("<br/>senseBox-ID ");
 	page_content += senseboxid;
 	page_content += FPSTR(WEB_BR_BR);
+
+	page_content += F("<br/>");
+	page_content += FPSTR(INTL_TTN_TITLE);
+	add_line_value_bool(page_content, FPSTR(INTL_SEND2TTN), FPSTR(WEB_CSV), send2ttn);
+	add_line_value(page_content, FPSTR(INTL_TTN_DEVEUI), ttn_deveui);
+	add_line_value(page_content, FPSTR(INTL_TTN_APPEUI), ttn_appeui);
+	add_line_value(page_content, FPSTR(INTL_TTN_APPKEY), ttn_appkey);
+	page_content += FPSTR(WEB_BR_BR);
+
 	add_line_value_bool(page_content, FPSTR(INTL_SEND_TO_OWN_API), send2custom);
 	add_line_value(page_content, FPSTR(INTL_SERVER), host_custom);
 	add_line_value(page_content, FPSTR(INTL_PATH), url_custom);
@@ -2582,6 +2685,56 @@ static void send_csv(const String& data) {
 			valueline.remove(valueline.length() - 1);
 		}
 		Serial.println(valueline);
+	} else {
+		debug_outln_error(FPSTR(DBG_TXT_DATA_READ_FAILED));
+	}
+}
+
+/*****************************************************************
+ * send data to The Things Network                               *
+ *****************************************************************/
+static void ttnEncodeFloat(float f, int i, uint8_t *dataTX)  { 
+	int16_t * dataTX16 = (int16_t *) dataTX;
+	dataTX16[i/2] = ((int16_t) (f * 100));
+}
+
+static void send_ttn(const String& data) {
+	debug_outln_info(F("TTN Input Data: "), data);
+	DynamicJsonDocument json2data(JSON_BUFFER_SIZE);
+	DeserializationError err = deserializeJson(json2data, data);
+	if (!err) {
+		if (LMIC.opmode & OP_TXRXPEND) {
+            debug_outln_info(F("OP_TXRXPEND, not sending"));
+        }
+		else  {
+			float p25 = -99, p10 = -99, temp = -99, humid = -99;
+			for (JsonObject measurement : json2data[FPSTR(JSON_SENSOR_DATA_VALUES)].as<JsonArray>()) {
+				if(strcmp(measurement["value_type"].as<char*>(), "SDS_P1") == 0)  {
+					p10 = measurement["value"].as<float>();
+					debug_outln_info(F("P10: "), p10);
+				}
+				if(strcmp(measurement["value_type"].as<char*>(), "SDS_P2") == 0)  {
+					p25 = measurement["value"].as<float>();
+					debug_outln_info(F("P25: "), p25);
+				}
+				if(strcmp(measurement["value_type"].as<char*>(), "temperature") == 0)  {
+					temp = measurement["value"].as<float>();
+					debug_outln_info(F("temp: "), temp);
+				}
+				if(strcmp(measurement["value_type"].as<char*>(), "humidity") == 0)  {
+					humid = measurement["value"].as<float>();
+					debug_outln_info(F("P25: "), humid);
+				}
+			}
+			// Queue data for send to TTN
+			uint8_t dataTX[8];
+            ttnEncodeFloat(temp, 0, dataTX);
+            ttnEncodeFloat(humid, 2, dataTX);
+            ttnEncodeFloat(p25, 4, dataTX);
+            ttnEncodeFloat(p10, 6, dataTX);
+			LMIC_setTxData2(1, dataTX, sizeof(dataTX), 0);
+			debug_outln_info(F("TTN Packet queued"));
+		}		
 	} else {
 		debug_outln_error(FPSTR(DBG_TXT_DATA_READ_FAILED));
 	}
@@ -4195,6 +4348,11 @@ static unsigned long sendDataToOptionalApis(const String &data) {
 		send_csv(data);
 	}
 
+	if (cfg::send2ttn) {
+		debug_outln_info(F("## Sending to TTN: "));
+		send_ttn(data);
+	}
+
 	return sum_send_time;
 }
 
@@ -4213,6 +4371,8 @@ void setup(void) {
 	serialSDS.enableIntTx(true);
 	serialSDS.setTimeout((12 * 9 * 1000) / 9600);
 
+	debug_outln_info(F("Starting setup()"));
+
 #if defined(WIFI_LoRa_32_V2)
 	// reset the OLED display, e.g. of the heltec_wifi_lora_32 board
 	pinMode(RST_OLED, OUTPUT);
@@ -4220,6 +4380,7 @@ void setup(void) {
 	delay(50);
 	digitalWrite(RST_OLED, HIGH);
 #endif
+	// starts i2c - disabled for TTN by setting pins to -1 but should be made optional
 	Wire.begin(I2C_PIN_SDA, I2C_PIN_SCL);
 
 #if defined(ESP8266)
@@ -4275,15 +4436,139 @@ void setup(void) {
 #endif
 #endif
 
+	// setup TTN 
+	debug_outln_info(F("TTN setup()"));
+	if(cfg::send2ttn)  {
+		// initialize run-time env
+		os_init();
+		// Reset the MAC state. Session and pending data transfers will be discarded.
+		LMIC_reset();
+		// setup initial job
+		os_setCallback(&sendjob, ttn_callback);
+	}
+
 	starttime = millis();									// store the start time
 	last_update_attempt = time_point_device_start_ms = starttime;
 	last_display_millis = starttime_SDS = starttime;
+	
+	debug_outln_info(F("Finished setup()"));
 }
 
 /*****************************************************************
  * And action                                                    *
  *****************************************************************/
+void sensor_loop(void);
+
 void loop(void) {
+	if(!cfg::send2ttn)  {	// no TTN - normal processing
+		sensor_loop();
+		return;
+	}
+	// for TTN this is the end of the road, the os_runloop_once() 
+	// function doesn't return and we need to use callbacks to 
+	// service the sensor loop
+    os_runloop_once();
+}
+
+// this is the handler for the TTN callback messages, it runs the original
+// loop() and then reschedules itself
+void ttn_callback(osjob_t* j)  {
+	// only run the sensor loop if we've got no transmissions pending
+	if(LMIC.opmode & OP_TXRXPEND) {
+		debug_outln_info(F("TTN Transmission pending, not running sensor_loop()"));
+	}
+	else {
+		sensor_loop();
+	}
+    // always initiate a new callback 
+    os_setTimedCallback(&sendjob, os_getTime()+sec2osticks(1), ttn_callback);
+}
+
+void onEvent (ev_t ev) {
+    debug_outln_info(F("os_getTime: "), os_getTime());
+    switch(ev) {
+        case EV_SCAN_TIMEOUT:
+            debug_outln_info(F("EV_SCAN_TIMEOUT"));
+            break;
+        case EV_BEACON_FOUND:
+            debug_outln_info(F("EV_BEACON_FOUND"));
+            break;
+        case EV_BEACON_MISSED:
+            debug_outln_info(F("EV_BEACON_MISSED"));
+            break;
+        case EV_BEACON_TRACKED:
+            debug_outln_info(F("EV_BEACON_TRACKED"));
+            break;
+        case EV_JOINING:
+            debug_outln_info(F("EV_JOINING"));
+            break;
+        case EV_JOINED:
+            debug_outln_info(F("EV_JOINED"));
+
+            // Disable link check validation (automatically enabled
+            // during join, but not supported by TTN at this time).
+            LMIC_setLinkCheckMode(0);
+            break;
+        case EV_RFU1:
+            debug_outln_info(F("EV_RFU1"));
+            break;
+        case EV_JOIN_FAILED:
+            debug_outln_info(F("EV_JOIN_FAILED"));
+            break;
+        case EV_REJOIN_FAILED:
+            debug_outln_info(F("EV_REJOIN_FAILED"));
+            break;
+            break;
+        case EV_TXCOMPLETE:
+            debug_outln_info(F("EV_TXCOMPLETE (includes waiting for RX windows)"));
+            if (LMIC.txrxFlags & TXRX_ACK)
+              debug_outln_info(F("Received ack"));
+            if (LMIC.dataLen) {
+              debug_outln_info(F("Received payload bytes : "), LMIC.dataLen);
+            }
+            break;
+        case EV_LOST_TSYNC:
+            debug_outln_info(F("EV_LOST_TSYNC"));
+            break;
+        case EV_RESET:
+            debug_outln_info(F("EV_RESET"));
+            break;
+        case EV_RXCOMPLETE:
+            // data received in ping slot
+            debug_outln_info(F("EV_RXCOMPLETE"));
+            break;
+        case EV_LINK_DEAD:
+            debug_outln_info(F("EV_LINK_DEAD"));
+            break;
+        case EV_LINK_ALIVE:
+            debug_outln_info(F("EV_LINK_ALIVE"));
+            break;
+        case EV_SCAN_FOUND:
+            debug_outln_info(F("EV_SCAN_FOUND"));
+            break;
+        case EV_TXSTART:
+            debug_outln_info(F("EV_TXSTART"));
+            break;
+        case EV_TXCANCELED:
+            debug_outln_info(F("EV_TXCANCELED"));
+            break;
+        case EV_RXSTART:
+            debug_outln_info(F("EV_RXSTART"));
+            break;
+        case EV_JOIN_TXCOMPLETE:
+            debug_outln_info(F("EV_JOIN_TXCOMPLETE"));
+            break;
+         default:
+            debug_outln_info(F("Unknown event: "), ev);
+            break;
+    }
+}
+
+// was loop() but now called either directly from the new loop() function or 
+// from a callback if send2ttn is true
+void sensor_loop(void) {
+	//debug_outln_info(F("Starting sensor_loop()"));
+
 	String result_PPD, result_SDS, result_PMS, result_HPM;
 	String result_GPS, result_DNMS;
 

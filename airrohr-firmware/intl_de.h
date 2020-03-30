@@ -53,6 +53,13 @@ const char INTL_DISPLAY_DEVICE_INFO[] PROGMEM = "Zeige Geräteinfo";
 const char INTL_DEBUG_LEVEL[] PROGMEM = "Debug&nbsp;Level";
 const char INTL_MEASUREMENT_INTERVAL[] PROGMEM = "Messintervall";
 const char INTL_DURATION_ROUTER_MODE[] PROGMEM = "Dauer&nbsp;Routermodus";
+
+const char INTL_TTN_TITLE[] PROGMEM = "TTN Device Config";
+const char INTL_SEND2TTN[] PROGMEM = "Send to TTN";
+const char INTL_TTN_APPEUI[] PROGMEM = "APPEUI";
+const char INTL_TTN_DEVEUI[] PROGMEM = "DEVEUI";
+const char INTL_TTN_APPKEY[] PROGMEM = "APPKEY";
+
 const char INTL_MORE_APIS[] PROGMEM = "Weitere APIs";
 const char INTL_SEND_TO_OWN_API[] PROGMEM = "An eigene API senden";
 const char INTL_SERVER[] PROGMEM = "Server";

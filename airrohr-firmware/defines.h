@@ -19,6 +19,11 @@
 
 #define LEN_FS_SSID 33				// credentials for sensor access point mode
 
+// TTN credentials
+#define LEN_TTN_APPEUI 17
+#define LEN_TTN_DEVEUI 17
+#define LEN_TTN_APPKEY 33
+
 #define LEN_DNMS_CORRECTION 10
 
 #define LEN_SENSEBOXID 30
