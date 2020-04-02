@@ -2693,9 +2693,15 @@ static void send_csv(const String& data) {
 /*****************************************************************
  * send data to The Things Network                               *
  *****************************************************************/
-static void ttnEncodeFloat(float f, int i, uint8_t *dataTX)  { 
+// very basic encoders
+static void ttnEncodeFloat2dp(float f, int i, uint8_t *dataTX)  { 
 	int16_t * dataTX16 = (int16_t *) dataTX;
 	dataTX16[i/2] = ((int16_t) (f * 100));
+}
+
+static void ttnEncodeFloat1dp(float f, int i, uint8_t *dataTX)  { 
+	int16_t * dataTX16 = (int16_t *) dataTX;
+	dataTX16[i/2] = ((int16_t) (f * 10));
 }
 
 static void send_ttn(const String& data) {
@@ -2728,10 +2734,10 @@ static void send_ttn(const String& data) {
 			}
 			// Queue data for send to TTN
 			uint8_t dataTX[8];
-            ttnEncodeFloat(temp, 0, dataTX);
-            ttnEncodeFloat(humid, 2, dataTX);
-            ttnEncodeFloat(p25, 4, dataTX);
-            ttnEncodeFloat(p10, 6, dataTX);
+            ttnEncodeFloat2dp(temp, 0, dataTX);
+            ttnEncodeFloat2dp(humid, 2, dataTX);
+            ttnEncodeFloat1dp(p25, 4, dataTX);
+            ttnEncodeFloat1dp(p10, 6, dataTX);
 			LMIC_setTxData2(1, dataTX, sizeof(dataTX), 0);
 			debug_outln_info(F("TTN Packet queued"));
 		}		

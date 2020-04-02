@@ -25,15 +25,14 @@ The TTN application decoder for the basic encoding is
 
 ```javascript
 function Decoder(bytes, port) {
-  // Decode an uplink message from a buffer
-  // (array) of bytes to an object of fields.
+  // Decode luftdaten sensor data
   var decoded = {};
 
   if (port === 1) {
     decoded.temperature = (bytes[0] + (bytes[1] * 256)) / 100.0;
     decoded.humidity = (bytes[2] + (bytes[3] * 256)) / 100.0;
-    decoded.pm25 = (bytes[4] + (bytes[5] * 256)) / 100.0;
-    decoded.pm10 = (bytes[6] + (bytes[7] * 256)) / 100.0;
+    decoded.pm25 = (bytes[4] + (bytes[5] * 256)) / 10.0;
+    decoded.pm10 = (bytes[6] + (bytes[7] * 256)) / 10.0;
   }
   return decoded;
 }
